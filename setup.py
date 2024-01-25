@@ -42,6 +42,8 @@ FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
 SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
 FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
+HIP_AVAILABLE = os.getenv("ROCM_HOME", "FALSE") == "TRUE"
+SKIP_CUDA_BULD = "TRUE" if HIP_AVAILABLE else "FALSE"
 
 
 def get_platform():
@@ -85,6 +87,9 @@ def check_if_cuda_home_none(global_option: str) -> None:
 def append_nvcc_threads(nvcc_extra_args):
     return nvcc_extra_args + ["--threads", "4"]
 
+def append_rocm_args(rocm_extra_args):
+    return rocm_extra_args + ['-O2','-arch=sm_35']
+
 
 cmdclass = {}
 ext_modules = []
@@ -94,7 +99,8 @@ if not SKIP_CUDA_BUILD:
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
 
-    check_if_cuda_home_none(PACKAGE_NAME)
+    #check_if_cuda_home_none(PACKAGE_NAME)
+    CUDA_HOME = None
     # Check, if CUDA11 is installed for compute capability 8.0
     cc_flag = []
     if CUDA_HOME is not None:
@@ -136,7 +142,7 @@ if not SKIP_CUDA_BUILD:
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],
-                "nvcc": append_nvcc_threads(
+                "hipcc": append_rocm_args(
                     [
                         "-O3",
                         "-std=c++17",
