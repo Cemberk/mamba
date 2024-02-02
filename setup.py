@@ -71,16 +71,15 @@ def get_cuda_bare_metal_version(cuda_dir):
     except:
         print("No CUDA")
 
-def get_rocm_bare_metal_version(rocm_dir):
+def get_rocm_bare_metal_version():
     try:
         raw_output = subprocess.run(
-        [rocm_dir + "/usr/bin/hipcc", "--version"], check=True, capture_output=True
+        ["/usr/bin/hipcc", "--version"], check=True, capture_output=True
         ).stdout
         #HIP version: 6.0.32830-d62f6a171
         output = raw_output.splitlines()
-        version = output[0].split("version:")[1].strip().split(".")
-        release_idx = output.index("release") + 1
-        bare_metal_version = version[0]+"."+version[1]
+        version = str(output[0]).split("version:")[1].strip().split(".")
+        bare_metal_version = Version(version[0]+"."+version[1])
         return raw_output, bare_metal_version
     except:
         print("No ROCM")
@@ -97,6 +96,7 @@ def check_if_cuda_home_none(global_option: str) -> None:
     )
 
 def check_if_rocm_home_none(global_option: str) -> None:
+    global ROCM_HOME
     if os.path.exists("/usr/bin/hipcc"):
         ROCM_HOME = "/usr/bin/hipcc"
         return
@@ -141,7 +141,7 @@ if not SKIP_CUDA_BUILD:
             cc_flag.append("-gencode")
             cc_flag.append("arch=compute_90,code=sm_90")
     elif ROCM_HOME is not None:
-        _, bare_metal_version = get_rocm_bare_metal_version(CUDA_HOME)
+        _, bare_metal_version = get_rocm_bare_metal_version()
         if bare_metal_version < Version("5.6"):
             raise RuntimeError(
                 f"{PACKAGE_NAME} is only supported on ROCM 5.6 and above.  "
@@ -173,7 +173,7 @@ if not SKIP_CUDA_BUILD:
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],
-                "hipcc": append_nvcc_threads(
+                f"{compiler}": append_nvcc_threads(
                     [
                         "-O3",
                         "-std=c++17",
