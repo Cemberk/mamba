@@ -42,9 +42,7 @@ FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
 SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
 FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
-HIP_AVAILABLE = os.getenv("ROCM_HOME", "FALSE") == "TRUE"
-SKIP_CUDA_BULD = "TRUE" if HIP_AVAILABLE else "FALSE"
-
+ROCM_HOME = None
 
 def get_platform():
     """
@@ -62,15 +60,30 @@ def get_platform():
 
 
 def get_cuda_bare_metal_version(cuda_dir):
-    raw_output = subprocess.check_output(
+    try:
+        raw_output = subprocess.check_output(
         [cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True
-    )
-    output = raw_output.split()
-    release_idx = output.index("release") + 1
-    bare_metal_version = parse(output[release_idx].split(",")[0])
+        )
+        output = raw_output.split()
+        release_idx = output.index("release") + 1
+        bare_metal_version = parse(output[release_idx].split(",")[0])
+        return raw_output, bare_metal_version
+    except:
+        print("No CUDA")
 
-    return raw_output, bare_metal_version
-
+def get_rocm_bare_metal_version(rocm_dir):
+    try:
+        raw_output = subprocess.run(
+        [rocm_dir + "/usr/bin/hipcc", "--version"], check=True, capture_output=True
+        ).stdout
+        #HIP version: 6.0.32830-d62f6a171
+        output = raw_output.splitlines()
+        version = output[0].split("version:")[1].strip().split(".")
+        release_idx = output.index("release") + 1
+        bare_metal_version = version[0]+"."+version[1]
+        return raw_output, bare_metal_version
+    except:
+        print("No ROCM")
 
 def check_if_cuda_home_none(global_option: str) -> None:
     if CUDA_HOME is not None:
@@ -83,12 +96,20 @@ def check_if_cuda_home_none(global_option: str) -> None:
         "only images whose names contain 'devel' will provide nvcc."
     )
 
+def check_if_rocm_home_none(global_option: str) -> None:
+    if os.path.exists("/usr/bin/hipcc"):
+        ROCM_HOME = "/usr/bin/hipcc"
+        return
+
+    warnings.warn(
+            f"{global_option} was requested, but hipcc was not found.  Are you sure your environment has hipcc available?  "
+            "If you're installing within a container from https://hub.docker.com/r/pytorch/pytorch, "
+            "ROCM images should have hipcc"
+            )
+
 
 def append_nvcc_threads(nvcc_extra_args):
     return nvcc_extra_args + ["--threads", "4"]
-
-def append_rocm_args(rocm_extra_args):
-    return rocm_extra_args + ['-O2','-arch=sm_35']
 
 
 cmdclass = {}
@@ -99,25 +120,35 @@ if not SKIP_CUDA_BUILD:
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
 
-    #check_if_cuda_home_none(PACKAGE_NAME)
-    CUDA_HOME = None
+    check_if_cuda_home_none(PACKAGE_NAME)
+    check_if_rocm_home_none(PACKAGE_NAME)
     # Check, if CUDA11 is installed for compute capability 8.0
     cc_flag = []
-    #if CUDA_HOME is not None:
-    #    _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
-    #    if bare_metal_version < Version("11.6"):
-    #        raise RuntimeError(
-    #            f"{PACKAGE_NAME} is only supported on CUDA 11.6 and above.  "
-    #            "Note: make sure nvcc has a supported version by running nvcc -V."
-    #        )
+    print(ROCM_HOME)
+    if CUDA_HOME is not None:
+        _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
+        if bare_metal_version < Version("11.6"):
+            raise RuntimeError(
+                f"{PACKAGE_NAME} is only supported on CUDA 11.6 and above.  "
+                "Note: make sure nvcc has a supported version by running nvcc -V."
+            )
+        compiler = "nvcc"
+        cc_flag.append("-gencode")
+        cc_flag.append("arch=compute_70,code=sm_70")
+        cc_flag.append("-gencode")
+        cc_flag.append("arch=compute_80,code=sm_80")
+        if bare_metal_version >= Version("11.8"):
+            cc_flag.append("-gencode")
+            cc_flag.append("arch=compute_90,code=sm_90")
+    elif ROCM_HOME is not None:
+        _, bare_metal_version = get_rocm_bare_metal_version(CUDA_HOME)
+        if bare_metal_version < Version("5.6"):
+            raise RuntimeError(
+                f"{PACKAGE_NAME} is only supported on ROCM 5.6 and above.  "
+                "Note: make sure hipcc has a supported version by running hipcc --version."
+            )
+        compiler = "hipcc"
 
-    cc_flag.append("-gencode")
-    cc_flag.append("arch=compute_70,code=sm_70")
-    cc_flag.append("-gencode")
-    cc_flag.append("arch=compute_80,code=sm_80")
-    #if bare_metal_version >= Version("11.8"):
-    #    cc_flag.append("-gencode")
-    #    cc_flag.append("arch=compute_90,code=sm_90")
 
     # HACK: The compiler flag -D_GLIBCXX_USE_CXX11_ABI is set to be the same as
     # torch._C._GLIBCXX_USE_CXX11_ABI
@@ -142,7 +173,7 @@ if not SKIP_CUDA_BUILD:
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],
-                "hipcc": append_rocm_args(
+                "hipcc": append_nvcc_threads(
                     [
                         "-O3",
                         "-std=c++17",
@@ -277,6 +308,5 @@ setup(
         "einops",
         "triton",
         "transformers",
-        "causal_conv1d>=1.1.0",
     ],
 )
